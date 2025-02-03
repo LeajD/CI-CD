@@ -1,0 +1,170 @@
+import groovy.json.JsonSlurper
+
+pipeline {
+
+    environment {
+        app = "name_of_app"
+        repository = "cr_registry"
+        version = "1.0"
+
+        buildDocker = "true"
+        pushDocker = "true"
+        deployDocker = "false"
+    }
+
+    //agent { node { label 'local' } }
+    agent any
+
+    stages {
+        stage('Build Docker image') {
+            when {
+                expression { buildDocker == "true" }
+            }
+            steps {
+              script {
+                if (env.JENKINS_URL == '$jenkins_url') {
+                  node('jenkins-worker-prod') {
+                    sh 'docker build --no-cache . -f Dockerfile -t ${repository}/${app}:${version} --label=name_of_app'
+                  }
+                }
+              }
+            }
+            post {
+                success {
+                    echo 'Build successfull! nothing to do now...'
+                    mattermostSend color: "#0000FF", message: "Build 'building  container' successfull! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+                failure {
+                   echo 'Build failed...'
+                   mattermostSend color: "danger", message: "Build 'building  container' failed! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+            }
+        }
+
+        stage('Push Docker image') {
+            when {
+                expression { pushDocker == "true" }
+            }
+            steps {
+              script {
+                if (env.JENKINS_URL == '$JENKINS_URL') {
+                  node('jenkins-worker-prod') {
+                          withCredentials([usernamePassword(credentialsId: 'azurecr.io', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                              sh "docker login $AZURE_CR -u $DOCKER_USERNAME -p $DOCKER_PASSWORD"
+                              sh "docker push ${repository}/${app}:${version}"
+                          }
+                  }
+                }
+              }
+            }
+            post {
+                success {
+                    echo 'Build successfull! nothing to do now...'
+                    mattermostSend color: "#0000FF", message: "Stage 'push ulm-reporting container' successfull! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+                failure {
+                   echo 'Build failed... docker rmi...'
+                   mattermostSend color: "danger", message: "Stage 'push ulm-reporting container' failed! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+            }
+        }
+
+        stage('Deploy Docker container') {
+        when {
+            expression { deployDocker == "true"}
+        }
+        steps {
+          script {
+            if (env.UMN_JENKINS == '1') {
+                  withCredentials([usernamePassword(credentialsId: '$server', usernameVariable: 'SSH_USERNAME', passwordVariable: 'SSH_PASSWORD')]) {
+                      script {
+                          def remoteServer = 'name_of_server'
+
+                          def sshConnection = [
+                              name: 'name_of_server',
+                              host: 'name_of_server',
+                              allowAnyHosts: true,
+                              user: env.SSH_USERNAME,
+                              password: env.SSH_PASSWORD
+                          ]
+
+                          if (env.buildDocker == 'true') {
+                              sleep time: 160, unit: 'SECONDS'
+                          }
+
+                          sshCommand remote: sshConnection, command: "docker stop reports || true"
+
+
+                          withCredentials([usernamePassword(credentialsId: 'credentials-id', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                              sshCommand remote: sshConnection, command: "docker login $AZURE_CR -u $DOCKER_USERNAME -p $DOCKER_PASSWORD"
+                              sshCommand remote: sshConnection, command: "docker run --pull always -p 4070:80 --name=reports-jenkins  -v /dockerVolumes/ulm_reporting/data:/data_volume/  -v /dockerVolumes/ulm_reporting/configData:/var/www/django/reports/configData --restart unless-stopped -d ${repository}/${app}:${version} "
+                          }
+
+                          sleep time: 60, unit: 'SECONDS'
+
+                          sshCommand remote: sshConnection, command: "docker ps -a"
+                          sshCommand remote: sshConnection, command: "curl -s http://localhost:4070/tools/"
+                          healthResponse= sshCommand remote: sshConnection, command: "curl -s http://localhost:4070/tools/health"
+                          if (healthResponse.trim() == "{'health': 'ok'}") {
+                              sshCommand remote: sshConnection, command: "docker rm reports || true"
+
+                              sshCommand remote: sshConnection, command: "docker rename reports-jenkins reports"
+
+                              } else {
+                                  sshCommand remote: sshConnection, command: "docker rm -f reports-jenkins || true"
+
+                                  sshCommand remote: sshConnection, command: "docker start reports || true"
+
+                                  error "New Container didn't start properly. Health check failed, message"
+                              }
+                              post{ success {mattermostSend color: "danger", message: "message"} failure {mattermostSend color: "danger", message: "message"} }
+                          }
+                      }
+            }
+          }
+        }
+        post {
+            success {
+                echo 'Build successfull! nothing to do now...'
+            }
+            failure {
+               echo 'Build failed... cleaning after build ...'
+               script {
+                 if (env.UMN_JENKINS == '1') {
+                       withCredentials([usernamePassword(credentialsId: 'name-of-server', usernameVariable: 'SSH_USERNAME', passwordVariable: 'SSH_PASSWORD')]) {
+                           script {
+                           def remoteServer = 'name-of-server'
+
+                           def sshConnection = [
+                              name: 'name-of-server',
+                              host: 'name-of-server',
+                              allowAnyHosts: true,
+                              user: env.SSH_USERNAME,
+                              password: env.SSH_PASSWORD
+                             ]
+
+                          sshCommand remote: sshConnection, command: "docker ps"
+
+                           container = sshCommand remote: sshConnection, command: "docker ps -a | grep reports-jenkins || true"
+                           if (container) {
+                              sshCommand remote: sshConnection, command: "docker stop \$(docker ps -a | grep reports-jenkins | awk '{print \$1}') && docker rm \$(docker ps -a | grep reports-jenkins | awk '{print \$1}')  "
+                           }
+
+                           old_container = sshCommand remote: sshConnection, command: "docker ps -a | grep reports | grep -v Up || true"
+                           if (old_container) {
+                               sshCommand remote: sshConnection, command: "docker restart \$(docker ps -a | grep reports | awk '{print \$1}') "
+                           }
+
+                           sleep time: 60, unit: 'SECONDS'
+                           sshCommand remote: sshConnection, command: "docker ps -a"
+                          }
+                }
+               echo '...deleted  reports-jenkins docker container and retrieved reports docker container'
+            }
+        }
+
+      }
+  }
+}
+}
+}

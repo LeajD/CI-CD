@@ -1,0 +1,189 @@
+stages:
+  - repository-scan
+  - sonarqube-scan
+  - plugin-build
+  - plugin-scan
+  - graylog-build-and-test
+  - plugin-deploy
+
+
+variables:
+  MAVEN_VERSION: "3.6.3"
+  SONARQUBE_SCAN: "true"
+  SCAN_REPO: "true"
+  BUILD_PLUGIN: "false"
+  SCAN_PLUGIN: "false"
+  BUILD_GRAYLOG: "false"
+  DEPLOY_PLUGIN: "false"
+  PROJECT_ID: $CI_PROJECT_ID 
+
+  MAVEN_OPTS: >-
+    -Dhttps.protocols=TLSv1.2
+    -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository
+    -Dorg.slf4j.simpleLogger.showDateTime=true
+    -Djava.awt.headless=true
+
+  MAVEN_CLI_OPTS: >-
+    --batch-mode
+    --errors
+    --fail-at-end
+    --show-version
+    --no-transfer-progress
+    -DinstallAtEnd=true
+    -DdeployAtEnd=true
+    -Dmaven.deploy.skip=false
+
+
+image:
+  name: maven:3-openjdk-8 
+services:
+  - name: docker:dind
+    alias: dind-1
+
+cache:
+  paths:
+    - .m2/repository
+
+
+before_script:
+  - cat /etc/os-release
+  - if [[ -x /usr/bin/apt-get ]] && [[ -d /etc/apt ]]; then   echo "apt is appropriate to use on this server" && apt update -y && apt install xmlstarlet -y; fi
+  - if [[ -x /sbin/apk ]] && [[ -d /etc/apk ]]; then   echo "apk is appropriate to use on this server" && apk add xmlstarlet; fi
+  - export CI_PROJECT_NAME=$(xmlstarlet sel -N ns="http://maven.apache.org/POM/4.0.0" -t   -v "/ns:project/ns:artifactId"   $CI_PROJECT_DIR/pom.xml) && echo $CI_PROJECT_NAME
+  - export GRAYLOG_PLUGIN_VERSION=$(xmlstarlet sel -N ns="http://maven.apache.org/POM/4.0.0" -t   -v "substring-before(/ns:project/ns:version, '-')"   $CI_PROJECT_DIR/pom.xml) && echo $GRAYLOG_PLUGIN_VERSION
+  - export GRAYLOG_GIT_VERSION=$(xmlstarlet sel -N ns="http://maven.apache.org/POM/4.0.0" -t    -v "substring-before(substring-after(/ns:project/ns:version, '-'), 'base')"   $CI_PROJECT_DIR/pom.xml) && echo $GRAYLOG_GIT_VERSION
+  - export PLUGIN_VERSION=$(xmlstarlet sel -N ns="http://maven.apache.org/POM/4.0.0" -t    -v "substring-after(substring-after(/ns:project/ns:version, '-'), 'base-')"   $CI_PROJECT_DIR/pom.xml) && echo $PLUGIN_VERSION
+
+repository-scan:
+  image: 
+    name: aquasec/trivy 
+    entrypoint: [""]
+  stage: repository-scan
+  script:
+    - export GITLAB_TOKEN=${PackageRegistryToken}
+    - trivy repository --branch ${CI_COMMIT_BRANCH} $GIT_URL --timeout 15m #make sure to specify
+  only:
+    variables:
+      - $SCAN_REPO == "true"
+
+sonarqube-scan:
+  image: 
+    name: maven:3-openjdk-8
+    entrypoint: [""]
+  stage: sonarqube-scan
+  script:
+    - mvn $MAVEN_VERSION_CLI_OPTS sonar:sonar -Dsonar.projectKey=$name_of_current_project \
+        -Dsonar.host.url=$SONAR_SERVER_URL \
+        -Dsonar.login=$SONAR_TOKEN
+  only:
+    variables:
+      - $SONARQUBE_SCAN == "true"
+
+
+
+plugin-build:
+  image: maven:3-openjdk-8
+  stage: plugin-build
+  script:
+  - echo '$IP $domain' >> /etc/hosts
+  - apt update -y
+  - apt install gcc g++ make npm tree lsb-release -y
+  - apt install xmlstarlet -y
+  - npm install -g npm@9.2.0
+  - npm install -g yarn
+  - echo $CI_PROJECT_NAME && echo $GRAYLOG_PLUGIN_VERSION && echo $GRAYLOG_GIT_VERSION
+  - cat /etc/os-release
+  - curl -fsSL https://deb.nodesource.com/setup_16.x | bash - 
+  - apt install nodejs  -y
+  - if [ -d $CI_PROJECT_DIR/target/ ]; then echo "Directory exists" && ls $CI_PROJECT_DIR/target/*; fi
+  - node -v
+  - if [[ -d /builds/SOC/graylog2-server ]]; then
+      echo "graylog2-server already cloned! build continues ..." && rm -rf /builds/SOC/graylog2-server && git clone -b $GRAYLOG_GIT_VERSION https://github.com/Graylog2/graylog2-server.git /builds/SOC/graylog2-server &&  cd /builds/SOC/graylog2-server  &&  mvn install -DskipTests=true -Dmaven.javadoc.skip=true -B -V -Dlicense.skipExistingHeaders -Dlicense.skip=true;
+    else
+      echo "graylog2-server not cloned ... will clone now" && git clone -b $GRAYLOG_GIT_VERSION https://github.com/Graylog2/graylog2-server.git /builds/SOC/graylog2-server && cd /builds/SOC/graylog2-server && mvn install -DskipTests=true -Dmaven.javadoc.skip=true -B -V -Dlicense.skipExistingHeaders -Dlicense.skip=true; fi #-X #commented because logs from job execeeded limit of bytes
+  - cd /builds/SOC/$CI_PROJECT_NAME 
+  - if [[ "$BUILD_PLUGIN" -eq "true" ]] && [ -e ci_settings.xml ]; then
+      echo "maven build plugin stage triggered, ci-settings.xml file found!" && mvn $MAVEN_VERSION_CLI_OPTS install -X -Dmaven.deploy.skip=false  -DuniqueVersion=false -DskipTests=true -Dmaven.javadoc.skip=true -B -V -Dlicense.skipExistingHeaders -Dlicense.skip=true  -DCI_PROJECT_NAME=$CI_PROJECT_NAME -DGRAYLOG_PLUGIN_VERSION=$GRAYLOG_PLUGIN_VERSION -DGRAYLOG_GIT_VERSION=$GRAYLOG_GIT_VERSION;
+    else
+      echo " BUILD_PLUGIN ARG set to false OR CI settings missing\! \n If deploying to GitLab Maven Repository, please see https://docs.gitlab.com/ee/user/packages/maven_repository/index.html#create-maven-packages-with-gitlab-cicd for instructions." ;
+    fi
+  - find / -name *audit-logs* 
+  - ls -ltra $CI_PROJECT_DIR/target/$CI_PROJECT_NAME-${GRAYLOG_PLUGIN_VERSION}-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION}.jar
+  - mv $CI_PROJECT_DIR/target/$CI_PROJECT_NAME-${GRAYLOG_PLUGIN_VERSION}-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION}.jar $CI_PROJECT_DIR/$CI_PROJECT_NAME-$GRAYLOG_PLUGIN_VERSION-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION}.jar 
+  only:
+    variables:
+      - $BUILD_PLUGIN == "true" 
+  artifacts:
+    paths:
+      - $CI_PROJECT_DIR/$CI_PROJECT_NAME*.jar  
+
+plugin-scan:
+  image: 
+    name: aquasec/trivy 
+    entrypoint: [""]
+  stage: plugin-scan
+  dependencies:
+  - plugin-build
+  script:
+    - trivy rootfs $CI_PROJECT_DIR/$CI_PROJECT_NAME-$GRAYLOG_PLUGIN_VERSION-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION}.jar  
+  only:
+    variables:
+      - $SCAN_PLUGIN == "true"
+
+graylog-build-and-test:
+  image: docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: ''
+  stage: graylog-build-and-test
+  dependencies: 
+  - plugin-build
+  script:
+    - apk add curl
+    - apk add xmlstarlet
+    - find / -name *audit-logs* 
+    - mv $CI_PROJECT_DIR/$CI_PROJECT_NAME-$GRAYLOG_PLUGIN_VERSION-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION}.jar  ./plugin.jar 
+    - cp $CI_PROJECT_DIR/graylog/Dockerfile ./
+    - docker info
+    - env
+    - docker build . -t graylog/local:$GRAYLOG_PLUGIN_VERSION  --build-arg version="${GRAYLOG_PLUGIN_VERSION}" --build-arg CI_PROJECT_NAME="${CI_PROJECT_NAME}" --build-arg GRAYLOG_PLUGIN_VERSION="${GRAYLOG_PLUGIN_VERSION}"
+    - echo 'vm.max_map_count=262144' >> /etc/sysctl.conf &&  sysctl -p && apk update && apk add jq curl git
+    - docker run -d --name opensearch -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" -e "xpack.security.enabled=false" elasticsearch:6.8.21 
+    - docker run -d --name my-mongo -p 27017:27017 -e MONGO_INITDB_REPLICA_SET_NAME=rs1 mongo:4.0 --replSet rs1
+    - sleep 10 && docker exec  my-mongo mongo --eval 'rs.initiate()' && sleep 30
+    - docker run -d --name=graylog -p 9000:9000 -p 12201:12201 -p 1514:1514 -p 514:514/tcp -e GRAYLOG_PASSWORD_SECRET=$secret -e GRAYLOG_ROOT_PASSWORD_SHA2=$SHA2 -e GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/ -e GRAYLOG_MONGODB_URI=mongodb://my-mongo:27017/graylog?replicaSet=rs1 -e GRAYLOG_ELASTICSEARCH_HOSTS=http://opensearch:9200/ -e GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE=100MB --link my-mongo:my-mongo --link opensearch:opensearch graylog/local:$GRAYLOG_PLUGIN_VERSION
+    - sleep 60 && docker ps -a && docker logs graylog
+    - docker logs graylog | grep -iE 'Graylog server up and running|AuditLogs|Error|Warning|Fail'
+    - docker logs graylog | grep -iE 'graylog server'
+    - cd $CI_PROJECT_DIR
+    - chmod +x ./check-plugin.sh
+    - ./check-plugin.sh
+  only:
+    variables:
+      - $BUILD_GRAYLOG == "true" 
+
+
+
+
+plugin-deploy:
+  image: maven:3-openjdk-8
+  stage: plugin-deploy
+  dependencies: 
+  - plugin-build
+  script:
+  - echo '$IP  $DOMAIN' >> /etc/hosts
+  - apt update -y
+  - apt install gcc g++ make npm tree lsb-release -y
+  - apt install xmlstarlet -y
+  - npm install -g npm@9.2.0
+  - npm install -g yarn
+  - cat /etc/os-release
+  - curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+  - apt install nodejs  -y
+  - find / -name *audit-logs* 
+  - node -v
+  - mv pom.xml NOTUSEpom.xml 
+  - mvn deploy:deploy-file -X -DgroupId=com.company -DartifactId=${CI_PROJECT_NAME} -Dversion=${GRAYLOG_PLUGIN_VERSION}-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION} -Dpackaging=jar -Dfile=$CI_PROJECT_DIR/$CI_PROJECT_NAME-$GRAYLOG_PLUGIN_VERSION-${GRAYLOG_GIT_VERSION}base-${PLUGIN_VERSION}.jar  -Durl=$GIT_URL/projects/${PROJECT_ID}/packages/maven/ -DrepositoryId=gitlab-maven -Dmaven.deploy.skip=true --settings ./ci_settings.xml
+  - mv NOTUSEpom.xml pom.xml 
+  only:
+    variables:
+      - $DEPLOY_PLUGIN == "true"

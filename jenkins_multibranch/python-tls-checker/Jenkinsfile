@@ -1,0 +1,77 @@
+pipeline {
+    environment {
+        version = "1.1"
+        repository = "$AZURE_CR"
+        auth_docker = credentials('$AZURE_CR')
+        pipeline= 'tls-checker'
+        image='tls-checker'
+    }
+
+    agent { node { label 'docker' } }
+
+
+   stages {
+        stage('Repository scan') {
+            steps {
+                echo 'Scanning....'
+                sh 'trivy repository --scanners vuln,misconfig,secret,license ./'
+            } 
+            post {
+                success {
+                    echo 'repo security scan done!'
+                    mattermostSend color: "#0000FF", message: "Stage 'Repository scan' successfull! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+                failure {
+                    echo 'repo security scan failure!'
+                    mattermostSend color: "danger", message: "Stage 'Repository scan' failed! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                echo 'Building....'
+                sh 'docker version'
+                sh 'java -version'
+                sh 'docker build . -f Dockerfile -t ${repository}/${image}:${version} --label=${image}'
+            }
+            post {
+                success {
+                    echo 'Build successfull! nothing to do now...'
+                    mattermostSend color: "#0000FF", message: "Stage 'build' successfull! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+                failure {
+                    echo 'Build failed... docker rmi...'
+                    sh "docker rmi \$(docker images | grep none | grep -E '([1-59] minutes|seconds)|(About a minute ago)|(About an hour ago)'| awk '{print \$3}')"
+                   echo '...deleted docker image'
+                   mattermostSend color: "danger", message: "Stage 'build' failed, docker rmi done! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"
+                }
+            }
+        }
+
+
+        stage('Pushing to Docker Registry') {
+            steps {
+                echo 'Pushing images to repository ${repository}'
+                sh 'docker login ${repository} -u ${auth_docker_USR} -p ${auth_docker_PSW}'
+                sh 'docker push ${repository}/${image}:${version}'
+            }
+            post {
+              success {  mattermostSend color: "#0000FF", message: "Stage 'Push to docker registry' successfull! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"             }
+              failure {  mattermostSend color: "danger", message: "Stage 'Push to docker registry' failed! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"              }
+            }
+        }
+
+
+        stage('Scan') {
+            steps {
+                sh 'trivy --format table --password ${auth_docker_PSW} --username ${auth_docker_USR} image ${repository}/${image}:${version}'
+            }
+            post {
+              success {  mattermostSend color: "good", message: "trivy scan successfull! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"             }
+              failure {  mattermostSend color: "danger", message: "trivy scan failed! \n\n Pipeline: ${env.pipeline} image: ${env.image}:${env.version} \n Docker repo: ${env.repository}[] \n  Jenkins: (<${env.BUILD_URL}|Open>) \n More info: \n Branch: ${env.BRANCH_NAME} \n NODE_LABELS: ${env.NODE_LABELS} \n JOB_NAME: ${env.JOB_NAME} \n BUILD_URL: ${env.BUILD_URL} \n git URL: ${env.GIT_URL} \n Test results: ${env.RUN_ARTIFACTS_DISPLAY_URL}"              }
+            }
+        }
+
+    }
+}

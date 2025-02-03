@@ -1,0 +1,31 @@
+{
+  "name": "NAME_OF_PLUGIN",
+  "version": "1.0.0-SNAPSHOT",
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "none"
+  },
+  "scripts": {
+    "build": "webpack",
+    "lint": "eslint src",
+    "lint:path": "eslint",
+    "test": "jest"
+  },
+  "keywords": [
+    "$SOFTWARE"
+  ],
+  "author": "none <none>",
+  "license": "MIT",
+  "eslintConfig": {
+    "extends": "$SOFTWARE"
+  },
+  "dependencies": {
+   "urijs": "1.19.10",
+"immutable": "^3.8.1",
+   "react-immutable-proptypes": "^2.1.0"
+  },
+  "devDependencies": {
+    "$SOFTWARE-web-plugin": "file:..$PATH_TO_PLUGIN"
+  }
+}

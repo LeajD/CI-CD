@@ -1,0 +1,20 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>company.org</groupId>
+    <artifactId>graylog-plugin</artifactId>
+    <version>1.0.0</version>
+    <description>Graylog ${project.artifactId} plugin.</description>
+
+
+    <repositories>
+        <repository>
+            <id>$plugin1</id>
+            <url>$URL/package/maven</url>
+        </repository>
+    </repositories>
+
+</project>
