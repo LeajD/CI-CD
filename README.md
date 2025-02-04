@@ -2,8 +2,10 @@
 
 This repository provides a versatile set of CI/CD configurations and supporting scripts for building, scanning, and deploying applications. It includes:
 
-- **CI-CD Diagram/** 
-![ci-cd diagram](cicd.png)
+- **CI-CD Diagram/**
+
+![ci-cd diagram](cicd-pipeline.png)
+
 
 
 - **GitLab CI/CD**:  
