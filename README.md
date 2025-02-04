@@ -2,6 +2,10 @@
 
 This repository provides a versatile set of CI/CD configurations and supporting scripts for building, scanning, and deploying applications. It includes:
 
+- **CI-CD Diagram/** 
+![ci-cd diagram](cicd.png)
+
+
 - **GitLab CI/CD**:  
   Maven build configurations, sonarqube scanning, building, deployment steps, and vulnerability scanning stages for custom Graylog plugins written in Java language, stored in Gitlab Package Registry as artifacts (see [gitlab-cicd-template-maven/.gitlab-ci.yml](gitlab-cicd-template-maven/.gitlab-ci.yml)).
 
